@@ -16,7 +16,7 @@
  * type-only import still couples one module to another.
  */
 
-import * as fs from "node:fs/promises";
+import * as fs from "node:fs";
 import { join } from "node:path";
 
 export interface Violation {
@@ -25,66 +25,55 @@ export interface Violation {
   reason: string;
 }
 
-export async function findViolations(root: string): Promise<Violation[]> {
+export function findViolations(root: string): Violation[] {
   const violations: Violation[] = [];
-  const currentfolder = ["inventory", "orders", "payments", "notifications"];
-
-  async function rootstructure(rootfolder: string): Promise<void> {
-    //extract all foles paths
-    const filepaths = await fs.readdir(rootfolder, {
+  const modules = new Set(["inventory", "orders", "payments", "notifications"]);
+  const filepaths = fs.readdirSync(join(root, "modules"), {
       recursive: true,
       withFileTypes: true,
     });
 
-    for (const file of filepaths) {
-      if (file.isFile() && file.name.endsWith(".ts")) {
-        const filePath = join(file.parentPath, file.name);
-        let currentmodule ;
-        if(currentfolder.some((folder) => file.parentPath.includes(`/${folder}/`))){
-          currentmodule = currentfolder.find((folder)=>file.parentPath.includes(`/${folder}/`));
-        }
-        // console.log(filePath);
-        const content = await fs.readFile(filePath, "utf-8");
+  for (const file of filepaths) {
+    if (!file.isFile() || !file.name.endsWith(".ts")) continue;
 
-        for (const line of content.split(/\r?\n/)) {
-          // let goingmodule;
-          // if(currentfolder.some((folder) => line.includes(`/${folder}/`))){
-          //   goingmodule = currentfolder.find((folder)=>line.includes(`/${folder}/`));
-          // }
-          if (
-            line.trim().startsWith("import ") &&
-            line.includes("../") &&
-            !line.includes("/platform/") &&
-            !line.includes("index.ts")
-          ) {
-            const goingmodule = currentfolder.find((folder) =>
-              line.includes(`/${folder}/`)
-            );
-            // console.log(`your file ${filePath} has voileted the import rule by importing ${line}`);
-            //create a violation object
-            if((currentmodule && goingmodule && currentmodule !== goingmodule) || (goingmodule)){
-              const violation: Violation = {
-              file: filePath,
-              importPath: line,
-              reason: "importing from another module excluding platform",
-              };
-              violations.push(violation);
-            }
-          }
-        }
+    const filePath = join(file.parentPath, file.name);
+    const currentModule = [...modules].find((module) =>
+      filePath.includes(`/modules/${module}/`),
+    );
+    if (!currentModule) continue;
+
+    const content = fs.readFileSync(filePath, "utf-8");
+    for (const line of content.split(/\r?\n/)) {
+      const importPath = line.match(/\bfrom\s+["']([^"']+)["']/)?.[1]
+        ?? line.match(/^\s*import\s+["']([^"']+)["']/)?.[1];
+      if (!importPath?.startsWith("../")) continue;
+
+      const targetModule = [...modules].find((module) =>
+        importPath.includes(`../${module}/`),
+      );
+      if (!targetModule || importPath.includes("../platform/") ||
+          (targetModule !== currentModule && importPath.endsWith("/index.ts"))) {
+        continue;
       }
+
+      violations.push({
+        file: filePath,
+        importPath: line,
+        reason: "importing from another module excluding platform",
+      });
     }
   }
 
-  await rootstructure(root);
   return violations;
 }
-findViolations("./src/modules")
-  .then((violations) => {
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  try {
+    const violations = findViolations("./src");
     console.log("Violations:", violations);
     process.exitCode = violations.length > 0 ? 1 : 0;
-  })
-  .catch((error) => {
+  } catch (error) {
     console.error("Failed to check files:", error);
     process.exitCode = 1;
-  });
+  }
+}
