@@ -23,5 +23,32 @@ export interface EventBus {
 }
 
 export function createEventBus(): EventBus {
-  throw new Error("not implemented");
+  const handlers = new Map<EventName, Handler<EventName>[]>();
+
+  return {
+    publish(name, payload) {
+      const registered = handlers.get(name) ?? [];
+      for (const handler of registered) {
+        try {
+          handler(payload);
+        } catch {
+          // A subscriber must not prevent other subscribers from running.
+        }
+      }
+      return registered.length;
+    },
+
+    subscribe(name, fn) {
+      const registered = handlers.get(name) ?? [];
+      registered.push(fn as Handler<EventName>);
+      handlers.set(name, registered);
+
+      return () => {
+        const index = registered.indexOf(fn as Handler<EventName>);
+        if (index >= 0) registered.splice(index, 1);
+      };
+    },
+  };
 }
+
+export const eventBus = createEventBus();
